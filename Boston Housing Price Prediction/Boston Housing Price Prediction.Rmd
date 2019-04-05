@@ -1,0 +1,316 @@
+---
+title: "Boston Housing Price Prediction"
+author: "Pruthvi Ranjan Reddy Pati"
+date: "4/5/2019"
+output: word_document
+---
+
+##1. Boston Housing Data
+
+
+
+
+```{r message=FALSE, warning = FALSE, echo = FALSE, results = FALSE}
+set.seed(12908411)
+library(MASS)
+library(glmnet)
+library(boot)
+library(rpart)
+library(rpart.plot)
+library(ipred)
+library(randomForest)
+library(gbm)
+library(mgcv)
+library(neuralnet)
+library(dplyr)
+library(ggplot2)
+library(tidyr)
+library(ROCR)
+library(nnet)
+
+data("Boston")
+
+
+sample_index <- sample(nrow(Boston),nrow(Boston)*0.75)
+boston_train <- Boston[sample_index,]
+boston_test <- Boston[-sample_index,]
+
+```
+
+###1.Linear Regression
+
+####Finding the best model:
+```{r m1,message=FALSE, warning = FALSE, echo = FALSE, results = FALSE}
+nullmodel=lm(medv~1, data=boston_train)
+fullmodel=lm(medv~., data=boston_train)
+
+model_step_aic <- step(nullmodel, scope=list(lower=nullmodel, upper=fullmodel), direction ='both', trace = 0)
+model_step_bic <- step(nullmodel, scope=list(lower=nullmodel, upper=fullmodel), direction ='both', k = log(nrow(boston_train)), trace = 0)
+
+aic_summary <- summary(model_step_aic)
+bic_summary <- summary(model_step_bic)
+
+lasso_fit = glmnet(x = as.matrix(boston_train[, -c(which(colnames(boston_train)=='medv'))]), y = boston_train$medv, alpha = 1)
+cv_lasso_fit = cv.glmnet(x = as.matrix(boston_train[, -c(which(colnames(Boston)=='medv'))]), y = boston_train$medv, alpha = 1, nfolds = 10)
+cv_lasso_fit$lambda.1se
+boston_insample_prediction = predict(lasso_fit, as.matrix(boston_train[, -c(which(colnames(boston_train)=='medv'))]), s = cv_lasso_fit$lambda.1se)
+coef(lasso_fit,s=cv_lasso_fit$lambda.1se)
+lasso_mse <- sum((boston_insample_prediction - boston_train$medv)^2)/nrow(boston_train-8-1)
+
+```
+
+To choose the best model, we performed variable selection using three techniques:
+
++ Best AIC
++ Best BIC
++ Lasso Regression
+
+__AIC__
+```{r m1.1,echo = F}
+summary(model_step_aic)$coefficients
+```
+
+
+__BIC__
+```{r m1.2,echo = F}
+summary(model_step_bic)$coefficients
+```
+
+__Lasso Regression__
+```{r m1.3,echo=F}
+coef(lasso_fit,s=cv_lasso_fit$lambda.1se)
+```
+
+
+* Below is a summary of the MSE of the three models:
+
+```{r m1.4,echo = F}
+model_summary <- data.frame(c((aic_summary$sigma)^2, (bic_summary$sigma)^2, lasso_mse))
+colnames(model_summary) <- c("MSE")
+rownames(model_summary) <- c("AIC model", "BIC model", "Lasso model")
+model_summary
+```
+
+* We chose the step AIC model as the best model, because it provides the least MSE out of the three models.
+
+* In Sample metrics:
+
+```{r m1.5,echo = FALSE}
+model_summary <- data.frame(c((aic_summary$sigma)^2, aic_summary$r.squared, aic_summary$adj.r.squared))
+linear_mse<-aic_summary$sigma^2
+colnames(model_summary) <- c('Final model')
+rownames(model_summary) <- c("MSE", "R-Squared", "Adjusted R-Squared")
+model_summary
+```
+
+
+###2.Regression tree
+
+* We fit a Regression Tree on our training data. Below is the output of the model:
+```{r m2,echo = F}
+boston_rpart <- rpart(formula = medv ~ ., data = boston_train)
+boston_rpart
+```
+
+```{r echo = F}
+prp(boston_rpart,digits = 4, extra = 1)
+```
+
+```{r m2.1,echo = F}
+boston_train_pred_tree = predict(boston_rpart)
+regression_tree_mse<-mean((boston_train_pred_tree - boston_train$medv)^2)
+regression_tree_mse
+```
+
+
+
+* The In-sample MSE of the Regression Tree is 15.44069.
+
+###3.Bagging forest
+
+* Finding the optimal number of trees
+```{r m3.1,echo = F}
+ntree<- c(1, 3, 5, seq(10, 200, 10))
+MSE.train<- rep(0, length(ntree))
+for(i in 1:length(ntree)){
+  boston.bag1<- bagging(medv~., data = boston_train, nbagg=ntree[i])
+  boston.bag.pred1<- predict(boston.bag1, newdata = boston_train)
+  MSE.train[i]<- mean((boston_train$medv-boston.bag.pred1)^2)
+}
+plot(ntree, MSE.train, type = 'l', col=2, lwd=2, xaxt="n")
+axis(1, at = ntree, las=1)
+```
+
+* Out of bag sample(OOB) error
+
+```{r m3.2,echo = F}
+boston.bag.oob<- bagging(medv~., data = boston_train, coob=T, nbagg=100)
+bagging_tree_mse<-boston.bag.oob$err^2
+bagging_tree_mse
+
+```
+
+* In Sample MSE:
+
+```{r m3.3,echo = F}
+boston.bag.final<- bagging(medv~., data = boston_train, nbagg=100)
+boston.bag.train<- predict(boston.bag.final, newdata = boston_train)
+bag_train_mse<- mean((boston_train$medv-boston.bag.train)^2)
+bag_train_mse
+
+```
+
+* The In-sample MSE of the Bagging Forest is 12.0329.
+
+###4.Random forest
+
+```{r m4,echo = F}
+boston.rf<- randomForest(medv~., data = boston_train, importance=TRUE)
+boston.rf
+
+```
+
+* Variable importance
+```{r m4.1,echo = F}
+boston.rf$importance
+
+```
+
+```{r m4.2,echo = F}
+plot(boston.rf$mse, type='l', col=2, lwd=2, xlab = "ntree", ylab = "OOB Error")
+
+```
+
+
+
+
+```{r m4.3,echo = F}
+oob.err<- rep(0, 13)
+train.err<- rep(0, 13)
+for(i in 1:13){
+  fit<- randomForest(medv~., data = boston_train, mtry=i)
+  oob.err[i]<- fit$mse[500]
+  train.err[i]<- mean((boston_train$medv-predict(fit, boston_train))^2)
+  cat(i, " ")
+}
+matplot(cbind(train.err, oob.err), pch=15, col = c("red", "blue"), type = "b", ylab = "MSE", xlab = "mtry")
+legend("topright", legend = c("train Error", "OOB Error"), pch = 15, col = c("red", "blue"))
+```
+
+* In-sample mse: 
+
+```{r m4.4,echo = F}
+boston_rf<-randomForest(medv~., data = boston_train,mtry=4, importance=TRUE)
+boston_train_rf.pred<- predict(boston_rf, boston_train)
+rf_mse<-mean((boston_train$medv-boston_train_rf.pred)^2)
+rf_mse
+```
+
+* The In-sample MSE of the Random Forest is 2.0329.
+
+
+###5.Boosting forest
+```{r m5,echo = F}
+boston.boost<- gbm(medv~., data = boston_train, distribution = "gaussian", n.trees = 4000, shrinkage = 0.01, interaction.depth = 8)
+summary(boston.boost)
+par(mfrow=c(1,2))
+plot(boston.boost, i="lstat")
+plot(boston.boost, i="rm")
+```
+
+###In sample prediction
+
+```{r m5.1,echo = F}
+ntree<- seq(100, 4000, 100)
+predmat<- predict(boston.boost, newdata = boston_train, n.trees = ntree)
+err<- apply((predmat-boston_train$medv)^2, 2, mean)
+plot(ntree, err, type = 'l', col=2, lwd=2, xlab = "n.trees", ylab = "Train MSE")
+abline(h=min(train.err), lty=2)
+boston.boost.pred.train<- predict(boston.boost, boston_train,n.trees = 2000)
+boosting_mse<-mean((boston_train$medv-boston.boost.pred.train)^2)
+boosting_mse
+```
+* The In-sample MSE of the Boosting Forest is 1.324547.
+
+###6.GAM
+
+* Finding the optimal number of trees
+```{r m6,echo = F}
+
+boston.gam <- gam(medv ~
+                    s(crim)+s(zn)+s(indus)+chas+s(nox)+s(rm)+s(age)
+                  +s(dis)+rad+s(tax)+s(ptratio)+s(black)+s(lstat), family="gaussian",data=boston_train);
+summary(boston.gam)
+```
+
+* Out of bag sample(OOB) error
+
+```{r m6.1,echo = F}
+plot(boston.gam, shade=TRUE,seWithMean=TRUE,scale=0, pages = 1)
+
+```
+
+
+
+* In-sample MSE of GAM
+
+```{r m6.2,echo = F}
+
+boston_train_pred_gam = predict(boston.gam)
+gam_mse<-mean((boston_train_pred_gam - boston_train$medv)^2)
+gam_mse
+```
+* The In-sample MSE of the GAM is 9.25.
+
+###7.Neural Networks
+
+```{r m7,echo = F}
+maxs <- apply(Boston, 2, max) 
+mins <- apply(Boston, 2, min)
+
+scaled_train <- as.data.frame(scale(boston_train, center = mins, scale = maxs - mins))
+scaled_test<-as.data.frame(scale(boston_test, center = mins, scale = maxs - mins))
+n <- names(scaled_train)
+f <- as.formula(paste("medv ~", paste(n[!n %in% "medv"], collapse = " + ")))
+nn <- neuralnet(f,data=scaled_train,hidden=c(5,3),linear.output=T)
+plot(nn)
+
+```
+
+* In-Sample MSE of neural net
+```{r m7.1,echo = F}
+pr.nn <-neuralnet::compute(nn,scaled_train[,1:13])
+
+pr.nn_train <- pr.nn$net.result*(maxs[14]-mins[14])+mins[14]
+
+MSE.nn_train <- mean((boston_train$medv - pr.nn_train)^2)
+MSE.nn_train
+
+```
+
+* The In-sample MSE of the Neural Network is 4.6632.
+###In sample model comparisions
+
+
+```{r m8,echo = F}
+
+
+model_name<-c("Linear Regression","Regression Tree","Bagging Forest","Random forest","Boosting ","GAM","Neural Network")
+mse_value<-c(linear_mse,regression_tree_mse,bagging_tree_mse,rf_mse,boosting_mse,gam_mse,MSE.nn_train)
+data.frame("Model"=model_name,"MSE"=mse_value)
+```
+
+
+* Final model we have chosen is Boosting based on MSE
+
+```{r m9,echo = F}
+boston.boost.pred.test<- predict(boston.boost, boston_test,n.trees=2000)
+boosting_test_mse<-mean((boston_test$medv-boston.boost.pred.test)^2)
+
+final_test_df<-data.frame("Data"=c("In_Sample","Out_of_Sample"),"MSE"=c(boosting_mse,boosting_test_mse))
+final_test_df
+
+
+```
+
+* The out of sample error is comparitively greater than in-sample mse, but is better than other models.
