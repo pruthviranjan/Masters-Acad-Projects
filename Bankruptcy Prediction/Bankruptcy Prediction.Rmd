@@ -1,0 +1,252 @@
+---
+title: "Bankruptcy Prediction"
+author: "Pruthvi Ranjan Reddy Pati"
+date: "4/5/2019"
+output: word_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r message=FALSE, warning = FALSE, echo = FALSE, results = FALSE}
+set.seed(12908411)
+library(rpart)
+library(rpart.plot)
+library(ipred)
+library(randomForest)
+library(gbm)
+library(mgcv)
+library(neuralnet)
+library(dplyr)
+library(ggplot2)
+library(tidyr)
+library(ROCR)
+library(nnet)
+
+```
+## Bankruptcy Data
+
+```{r m7.1,echo = F}
+set.seed(12908411)
+bankruptcy <- read.csv("bankruptcy.csv")
+
+bankruptcy$DLRSN <- as.factor(bankruptcy$DLRSN)
+bankruptcy$CUSIP <-NULL
+bankruptcy$FYEAR <- NULL
+
+index_bankruptcy <- sample(nrow(bankruptcy),nrow(bankruptcy)*0.75)
+bankruptcy.train = bankruptcy[index_bankruptcy,]
+bankruptcy.test = bankruptcy[-index_bankruptcy,]
+
+costfunc = function(obs, pred.p, pcut){
+  weight1 = 35   # define the weight for "true=1 but pred=0" (FN)
+  weight0 = 1    # define the weight for "true=0 but pred=1" (FP)
+  c1 = (obs==1)&(pred.p<pcut)    # count for "true=1 but pred=0"   (FN)
+  c0 = (obs==0)&(pred.p>=pcut)   # count for "true=0 but pred=1"   (FP)
+  cost = mean(weight1*c1 + weight0*c0)  # misclassification with weight
+  return(cost) # you have to return to a value when you write R functions
+} 
+
+```
+
+###1.Logistic Regression
+
+```{r m7.2,echo = F}
+
+model_logit<- glm(DLRSN~., family=binomial(link = "logit"), data=bankruptcy.train)
+
+pred.model_logit_train <- predict(model_logit,bankruptcy.train,type="response")
+
+pred_logit_train <- prediction(pred.model_logit_train, bankruptcy.train$DLRSN)
+perf_logit_train <- performance(pred_logit_train, "tpr", "fpr")
+plot(perf_logit_train, colorize=TRUE)
+
+
+logistic_auc_train<-unlist(slot(performance(pred_logit_train, "auc"), "y.values"))
+
+print(logistic_auc_train)
+
+```
+
+```{r echo=F}
+
+pred.logistic.in<-(pred.model_logit_train>=1/36)
+table(bankruptcy.train$DLRSN,pred.logistic.in,dnn=c("Observed","Predicted"))
+```
+
+
+* In-Sample metrics of logistics:
+
+```{r m7.3,echo = F}
+
+
+assymmetric_logistic_train<-(table(bankruptcy.train$DLRSN,pred.logistic.in,dnn=c("Observed","Predicted"))[1,2]+table(bankruptcy.train$DLRSN,pred.logistic.in,dnn=c("Observed","Predicted"))[2,1])/nrow(bankruptcy.train)
+
+logistic_metrics<-data.frame("Logistic"=c(logistic_auc_train,assymmetric_logistic_train))
+rownames(logistic_metrics)<-c("AUC","Asymmetric Rate")
+
+logistic_metrics
+
+
+```
+
+
+###2.Classification Tree
+```{r m2.2.1,echo = F}
+
+
+model_classification_tree<- rpart(formula = DLRSN~. , data = bankruptcy.train, method = "class", parms = list(loss=matrix(c(0,35,1,0), nrow = 2)))
+
+
+pred.model_tree_train <-predict(model_classification_tree,bankruptcy.train,type="prob")
+
+pred_tree_train <- prediction(pred.model_tree_train[,2], bankruptcy.train$DLRSN)
+perf_tree_train <- performance(pred_tree_train, "tpr", "fpr")
+plot(perf_tree_train, colorize=TRUE)
+
+
+tree_auc_train<-unlist(slot(performance(pred_tree_train, "auc"), "y.values"))
+
+print(tree_auc_train)
+
+
+```
+
+
+```{r m2.2.2,echo=F}
+
+# define a sequence from 0.01 to 1 by 0.01
+
+pred.tree.in<-(pred.model_tree_train[,2]>=1/36)
+table(bankruptcy.train$DLRSN,pred.tree.in,dnn=c("Observed","Predicted"))
+
+
+
+```
+* In-Sample metrics of logistics:
+
+```{r m2.2.3,echo = F}
+
+
+assymmetric_tree_train<-(table(bankruptcy.train$DLRSN,pred.tree.in,dnn=c("Observed","Predicted"))[1,2]+table(bankruptcy.train$DLRSN,pred.tree.in,dnn=c("Observed","Predicted"))[2,1])/nrow(bankruptcy.train)
+
+tree_metrics<-data.frame("Classification tree"=c(tree_auc_train,assymmetric_tree_train))
+rownames(tree_metrics)<-c("AUC","Asymmetric Rate")
+
+tree_metrics
+
+
+```
+
+
+###3.GAM
+```{r m3.2.1,echo = F}
+
+gam_classification_formula <- as.formula(DLRSN~s(R1)+s(R2)+s(R3)+s(R4)+s(R5)+s(R6)+s(R7)+s(R8)+s(R9)+s(R10))
+
+model_classification_gam <- gam(formula = gam_classification_formula, family=binomial,data=bankruptcy.train);
+
+plot(model_classification_gam, shade=TRUE,seWithMean=TRUE,scale=0, pages = 1)
+ 
+ 
+
+
+pred.model_gam_train <-predict(model_classification_gam,bankruptcy.train,type="response")
+
+
+
+
+```
+
+
+
+```{r m3.2.2,echo=F}
+
+pred.gam.in<-(pred.model_gam_train>=1/36)
+table(bankruptcy.train$DLRSN,pred.gam.in,dnn=c("Observed","Predicted"))
+
+```
+* In-Sample metrics of logistics:
+
+```{r m3.2.3,echo = F}
+
+
+assymmetric_gam_train<-(table(bankruptcy.train$DLRSN,pred.gam.in,dnn=c("Observed","Predicted"))[1,2]+table(bankruptcy.train$DLRSN,pred.gam.in,dnn=c("Observed","Predicted"))[2,1])/nrow(bankruptcy.train)
+
+gam_metrics<-data.frame("Classification tree"=assymmetric_tree_train)
+rownames(gam_metrics)<-c("Asymmetric Rate")
+
+gam_metrics
+
+
+```
+
+###4.Neural Net
+
+```{r m4.2.1,echo = F}
+
+model_classification_nnet <- nnet(DLRSN~., data=bankruptcy.train, size=1, maxit=500)
+
+pred.model_nnet_train <-predict(model_classification_nnet,bankruptcy.train)
+
+```
+
+```{r m4.2.2,echo=F}
+
+pred.nnet.in<-(pred.model_nnet_train>=1/36)
+table(bankruptcy.train$DLRSN,pred.nnet.in,dnn=c("Observed","Predicted"))
+
+```
+
+* In-Sample metrics of logistics:
+
+```{r m4.2.3,echo = F}
+
+
+assymmetric_nnet_train<-(table(bankruptcy.train$DLRSN,pred.nnet.in,dnn=c("Observed","Predicted"))[1,2]+table(bankruptcy.train$DLRSN,pred.nnet.in,dnn=c("Observed","Predicted"))[2,1])/nrow(bankruptcy.train)
+
+nnet_metrics<-data.frame("Classification tree"=assymmetric_nnet_train)
+rownames(nnet_metrics)<-c("Asymmetric Rate")
+
+nnet_metrics
+
+
+```
+
+###In sample model comparisions
+
+```{r m4.5,echo = F}
+
+
+model_classification_name<-c("Logistic Regression","Classification Tree","GAM","Neural Network")
+assym_value<-c(assymmetric_logistic_train,assymmetric_tree_train,assymmetric_gam_train,assymmetric_nnet_train)
+data.frame("Model"=model_classification_name,"Asymmetric Cost"=assym_value)
+```
+
+* Final model we have chosen is Neural Network based on Asymmetric Cost
+```{r m4.5.1,echo = F}
+
+
+pr.nn_test <- predict(model_classification_nnet,bankruptcy.test)
+pred.nnet.out<-(pr.nn_test>=1/36)
+assymmetric_nnet_test<-(table(bankruptcy.test$DLRSN,pred.nnet.out,dnn=c("Observed","Predicted"))[1,2]+table(bankruptcy.test$DLRSN,pred.nnet.out,dnn=c("Observed","Predicted"))[2,1])/nrow(bankruptcy.test)
+
+#boston_test_rf.pred<- predict(boston_rf, boston_test)
+#rf_test_mse<-mean((boston_test$medv-boston_test_rf.pred)^2)
+
+#boston_test_pred_tree = predict(boston_rpart,boston_test)
+#regression_tree_test_mse<-mean((boston_test_pred_tree - boston_test$medv)^2)
+
+
+#boston.bag.test<- predict(boston.bag.final, newdata = boston_test)
+#bag_test_mse<- mean((boston_test$medv-boston.bag.test)^2)
+
+#linear_test_pred<-predict(model_step_aic,boston_test)
+#linear_test_mse<-mean((boston_test$medv-linear_test_pred)^2)
+#mse_test<-c(linear_test_mse,regression_tree_test_mse,bag_test_mse,rf_test_mse,boosting_test_mse)
+final_test_df<-data.frame("Data"=c("In_Sample","Out_of_Sample"),"Assymetric cost"=c(assymmetric_nnet_test,assymmetric_nnet_train))
+final_test_df
+
+```
+* The out of sample cost is close to in-sample cost,it can considered as stable model without overfitting
