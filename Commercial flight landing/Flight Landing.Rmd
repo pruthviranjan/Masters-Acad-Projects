@@ -1,0 +1,144 @@
+---
+title: "Project 3"
+author: "Pruthvi Ranjan Reddy Pati"
+date: "3/3/2019"
+output:
+  word_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(readxl)
+library(dplyr)
+library(nnet)
+library(tidyr)
+library(ggplot2)
+```
+
+## Data Preparation
+
+```{r c1,warning=FALSE,error=FALSE}
+
+FAA_1 <- read_excel("FAA1(1).xls")
+FAA_2 <- read_excel("FAA2(1).xls")
+FAA_2 <- mutate(FAA_2, duration = NA)
+FAA <- rbind(FAA_1, FAA_2)
+FAA <- FAA[,c(1,3,4,6,7,8,2,5)]
+FAA <- FAA %>% 
+  filter(duration > 40 | is.na(duration)) %>% 
+  filter(between(speed_ground, 30, 140))  %>%  
+  filter(between(speed_air, 30, 140) | is.na(speed_air))  %>% 
+  filter(height > 6)
+FAA <- arrange_(FAA, .dots = colnames(FAA)[1:6])
+FAA <- FAA[!duplicated(FAA[,1:6]),]
+FAA <- FAA %>% 
+  mutate(aircraft_01 = case_when(
+    FAA$aircraft == "airbus" ~ 0,
+    TRUE ~ 1))
+FAA$aircraft_01 <- as.factor(FAA$aircraft_01)
+faa_multi<-FAA
+faa_multi$y<-ifelse(faa_multi$distance<1000,1,
+              ifelse(faa_multi$distance>=2500,3,2))
+faa_multi<-faa_multi[,-c(1,6)]
+faa_multi$y<-as.factor(faa_multi$y)
+summary(faa_multi)
+```
+##Multinomial Regression
+```{r c2,warning=FALSE,error=FALSE}
+multi_reg<-multinom(formula= y ~ duration+aircraft_01+no_pasg+ speed_ground+height+pitch, data=faa_multi)
+
+
+summary(multi_reg)
+
+```
+
+* Performing step regression after mean imputing `duration`
+```{r c3,warning=FALSE,error=FALSE}
+
+faa_multi$duration<-ifelse(is.na(faa_multi$duration),mean(faa_multi$duration,na.rm=TRUE),faa_multi$duration)
+
+multi_reg1<-multinom(formula= y ~ duration+aircraft_01+no_pasg+ speed_ground+height+pitch, data=faa_multi)
+
+step_multi<-step(multi_reg1)
+```
+
+##Final Model
+```{r final,warning=FALSE,error=FALSE}
+summary(step_multi)
+
+```
+
+##Plots
+```{r c4,warning=FALSE,error=FALSE}
+sg<-mutate(faa_multi, speed=cut_number(speed_ground,5)) %>%
+group_by(speed, y) %>% summarise(count=n()) %>%
+group_by(speed) %>% mutate(etotal=sum(count),
+proportion=count/etotal)
+ggplot(sg, aes(x=speed, y=proportion, group=y,linetype=y)) + geom_line()
+
+h<-mutate(faa_multi, height=cut_number(height,5)) %>%
+group_by(height, y) %>% summarise(count=n()) %>%
+group_by(height) %>% mutate(etotal=sum(count),
+proportion=count/etotal)
+ggplot(h, aes(x=height, y=proportion, group=y,linetype=y)) + geom_line()
+
+p<-mutate(faa_multi, pitch=cut_number(pitch,5)) %>%
+group_by(pitch, y) %>% summarise(count=n()) %>%
+group_by(pitch) %>% mutate(etotal=sum(count),
+proportion=count/etotal)
+ggplot(p, aes(x=pitch, y=proportion, group=y,linetype=y)) + geom_line()
+
+air<-group_by(faa_multi,aircraft_01, y) %>%
+summarise(count=n()) %>% group_by(aircraft_01) %>%
+mutate(etotal=sum(count), proportion=count/etotal)
+ggplot(air, aes(x=aircraft_01, y=proportion,
+group=y, linetype=y)) + geom_line()
+
+```
+
+##Observation for the FAA agent:
+* `Aircraft type`,`speed ground`,`height`,`pitch` are the most influential on level of the landing distance
+* From the above plots we can observe,the aircrafty type`Boeing` has higher chances of either having very high landing distances or very low compared to `Airbus`.Also, the probabilty ratio of landing distance of level 3 and 1 will multiply by e^9 factor
+* With `pitch` increasing the chances of risky landing increases and also obviously with `speed ground`
+ 
+
+
+
+
+##Prediction
+
+```{r c5,warning=FALSE,error=FALSE}
+preds<-
+data.frame(faa_multi$y,predict(step_multi,data.frame(faa_multi),type="probs"))
+xtabs(~predict(step_multi)+faa_multi$y)
+
+
+
+```
+#2
+
+
+* Number of Passengers is a non-negative integer and is a count. Poisson Distribution might be good choice to explain Number of Passengers. 
+
+* For Poisson regression , original distance variable is used
+
+```{r c6,warning=FALSE,error=FALSE}
+poisson_data<-FAA[,-c(1,6)]
+poisson_data$duration<-ifelse(is.na(poisson_data$duration),mean(poisson_data$duration,na.rm=TRUE),poisson_data$duration)
+
+pois_reg<-glm(no_pasg~.,family = "poisson",data=poisson_data[,-6])
+
+step_pois<-step(pois_reg)
+
+summary(step_pois)
+
+
+```
+##Observations:
+* Poisson regression is performed.
+* From the step wise regression it can be observed that there is a only small variation in the AIC of different model.
+* `Height` can be considered the most significant of all the variables to predict `Number of Passengers`
+
+
+
